@@ -1,0 +1,361 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<title>Hero Battle League – Visual (v2)</title>
+<style>
+  :root { --bg:#0b1220; --panel:#111a2e; --stroke:#253045; --ink:#e7ecf3; --accent:#2b8cff; }
+  * { box-sizing: border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+  header { padding:12px 16px; background:#0f1a33; border-bottom:1px solid #223; position:sticky; top:0; z-index:10; }
+  h1 { margin:0; font-size:18px; }
+  .wrap { padding:10px; max-width:900px; margin:0 auto; display:flex; flex-direction:column; gap:10px; }
+  .panel { background:var(--panel); border:1px solid var(--stroke); border-radius:12px; padding:10px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .title { font-weight:700; margin-bottom:8px; }
+  .tiny { font-size:12px; opacity:.9; }
+  button { background:#1e2a44; color:var(--ink); border:1px solid var(--stroke); padding:10px 14px; border-radius:10px; font-size:16px; }
+  button.cta { background:var(--accent); border-color:var(--accent); color:white; }
+  button:disabled { opacity:.5; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .log { height:160px; overflow:auto; background:#0a1020; border:1px solid #213350; border-radius:8px; padding:8px; }
+  .hpbar { height:10px; background:#26324a; border-radius:6px; overflow:hidden; }
+  .hpbar > div { height:100%; background:#64d2ff; transition: width .2s linear; }
+  .enbar { height:8px; background:#1e3220; border-radius:6px; overflow:hidden; }
+  .enbar > div { height:100%; background:#7df97d; transition: width .2s linear; }
+  .pill { padding:2px 6px; border:1px solid var(--stroke); border-radius:999px; font-size:12px; }
+  .controls { display:grid; grid-template-columns: repeat(2, 1fr); gap:8px; }
+  .controls button { padding:14px; font-size:18px; }
+  .controls .wide { grid-column: span 2; }
+  .shields { display:flex; gap:6px; }
+  .shield { width:18px; height:18px; border:2px solid #64d2ff; border-radius:4px; }
+  .shield.off { opacity:.25; }
+  canvas { width:100%; height:240px; background:linear-gradient(#0b1220,#0b1220 55%,#0e1730 55%); border:1px solid #223650; border-radius:12px; touch-action: manipulation; }
+  .roster { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+  .card { border:1px solid var(--stroke); background:#0c1426; padding:10px; border-radius:10px; }
+  .card h3 { margin:0 0 4px 0; font-size:16px; }
+  .tag { font-size:12px; border:1px solid var(--stroke); padding:2px 8px; border-radius:999px; }
+  @media (min-width: 760px){ canvas { height:300px; } }
+</style>
+</head>
+<body>
+<header><h1>Hero Battle League – Visual (v2)</h1></header>
+
+<div class="wrap">
+  <div class="panel">
+    <div class="title">Pick your team (3)</div>
+    <div class="roster" id="roster"></div>
+    <div class="row" style="margin-top:8px;">
+      <button id="autoBtn">Auto Pick</button>
+      <button id="startBtn" class="cta">Start Match</button>
+      <span class="tiny" id="msg"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <canvas id="arena" width="900" height="300"></canvas>
+    <div class="grid2" style="margin-top:6px;">
+      <div id="youPanel"></div>
+      <div id="aiPanel"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="fastBtn">⚡ Fast</button>
+      <button id="switchBtn">🔄 Switch</button>
+      <button id="c1Btn" class="wide">💥 Charged 1</button>
+      <button id="c2Btn" class="wide">💥 Charged 2</button>
+      <button id="shieldBtn" class="wide">🛡️ Queue Shield</button>
+    </div>
+    <div class="row tiny" style="margin-top:6px;">
+      <span>Timer: <b id="timer">240</b>s</span>
+      <span class="pill">Turn: <span id="turn">0</span></span>
+      <span class="pill">Queued: <span id="qa">None</span></span>
+      <span class="pill">Shield: <span id="sq">No</span></span>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="panel tiny">
+    Tip: tap the big buttons to act; swipe right on the canvas to switch; double-tap canvas to Queue Shield.
+  </div>
+</div>
+
+<script>
+// ------- Data (original characters) --------
+const CLASS_EFFECT = {
+  Tech:     { strong: ["Mutant"], weak: ["Science"] },
+  Mystic:   { strong: ["Cosmic"], weak: ["Mutant"] },
+  Cosmic:   { strong: ["Skill"],  weak: ["Mystic"] },
+  Skill:    { strong: ["Science"],weak: ["Cosmic"] },
+  Science:  { strong: ["Tech"],   weak: ["Skill"] },
+  Mutant:   { strong: ["Mystic"], weak: ["Tech"] }
+};
+const EFFECTIVE=1.2, RESIST=0.83;
+
+const heroes = [
+  { id:"volt_sentinel", name:"Volt Sentinel", class:"Tech",    color:"#66d9ff",
+    stats:{atk:180,def:160,hp:160},
+    fast:{name:"Pulse Shot", power:4, energyGain:8, cooldown:1},
+    charged:[
+      {name:"Missile Salvo", power:65, energyCost:45, debuff:null},
+      {name:"Overcharge Beam", power:90, energyCost:55, debuff:null}
+    ]
+  },
+  { id:"aegis_atom", name:"Aegis Atom", class:"Science", color:"#7df97d",
+    stats:{atk:160,def:170,hp:170},
+    fast:{name:"Kinetic Jab", power:3, energyGain:9, cooldown:1},
+    charged:[
+      {name:"Inertial Net", power:60, energyCost:45, debuff:{target:"opp", stat:"atk", stages:-1, chance:1}},
+      {name:"Momentum Kick", power:45, energyCost:35, debuff:null}
+    ]
+  },
+  { id:"starflare", name:"Starflare", class:"Cosmic", color:"#ffd166",
+    stats:{atk:190,def:155,hp:165},
+    fast:{name:"Photon Tap", power:3, energyGain:10, cooldown:1},
+    charged:[
+      {name:"Nova Burst", power:75, energyCost:50, debuff:null},
+      {name:"Comet Fist", power:55, energyCost:40, debuff:null}
+    ]
+  },
+  { id:"arc_sorcerer", name:"Arc Sorcerer", class:"Mystic", color:"#cdb4ff",
+    stats:{atk:165,def:170,hp:165},
+    fast:{name:"Glyph Swipe", power:3, energyGain:9, cooldown:1},
+    charged:[
+      {name:"Binding Sigils", power:70, energyCost:50, debuff:{target:"opp", stat:"def", stages:-1, chance:.5}},
+      {name:"Time Ravel", power:55, energyCost:40, debuff:{target:"self", stat:"def", stages:+1, chance:.5}}
+    ]
+  },
+  { id:"nightclaw", name:"Nightclaw", class:"Skill", color:"#ff7b7b",
+    stats:{atk:170,def:160,hp:175},
+    fast:{name:"Razor Slash", power:4, energyGain:8, cooldown:1},
+    charged:[
+      {name:"Silent Pounce", power:60, energyCost:45, debuff:null},
+      {name:"Royal Rend", power:80, energyCost:55, debuff:null}
+    ]
+  },
+  { id:"ravager_x", name:"Ravager X", class:"Mutant", color:"#f4a261",
+    stats:{atk:175,def:155,hp:185},
+    fast:{name:"Feral Slice", power:4, energyGain:8, cooldown:1},
+    charged:[
+      {name:"Frenzy Barrage", power:65, energyCost:45, debuff:null},
+      {name:"Adamant Rush", power:85, energyCost:60, debuff:null}
+    ],
+    passive:{regenEveryTurns:6, amount:3}
+  }
+];
+
+function deep(o){ return JSON.parse(JSON.stringify(o)); }
+function effMult(a,b){ const e=CLASS_EFFECT[a]||{strong:[],weak:[]}; if(e.strong.includes(b)) return EFFECTIVE; if(e.weak.includes(b)) return RESIST; return 1; }
+function clamp(v,l,h){ return Math.max(l, Math.min(h,v)); }
+function pct(n,d){ return d<=0?0: Math.round((n/d)*100); }
+
+const TURN=0.5, SWCD=60, MAX_SH=2, MATCH=240;
+
+// ------- Model --------
+class Fighter{
+  constructor(hero){
+    this.hero=deep(hero); this.hpMax=hero.stats.hp; this.hp=this.hpMax; this.energy=0;
+    this.atkS=0; this.defS=0; this.shields=MAX_SH; this.sw=0; this.cd=0;
+  }
+  atk(){ return Math.max(1, Math.round(this.hero.stats.atk*(1+0.15*this.atkS))); }
+  def(){ return Math.max(1, Math.round(this.hero.stats.def*(1+0.15*this.defS))); }
+}
+
+class Team{
+  constructor(list){ this.roster=list.map(h=>new Fighter(h)); this.activeIndex=0; }
+  get active(){ return this.roster[this.activeIndex]; }
+  canSwitch(){ return this.roster.some((f,i)=>f.hp>0 && i!==this.activeIndex); }
+  next(){ for(let i=0;i<this.roster.length;i++){ if(this.roster[i].hp>0) return i; } return -1; }
+}
+
+class Battle{
+  constructor(yt,at,log,ui,anim){ this.you=new Team(yt); this.ai=new Team(at); this.t=MATCH; this.turn=0; this.log=log; this.ui=ui; this.anim=anim; this.endd=false; }
+  start(){ this.int=setInterval(()=>this.tick(), TURN*1000); this.ui(); }
+  end(reason){
+    if(this.endd) return; clearInterval(this.int); this.endd=true;
+    const y=this.you.roster.filter(f=>f.hp>0).length, a=this.ai.roster.filter(f=>f.hp>0).length;
+    const msg=y>a?"You win!":a>y?"AI wins!":"Tie!"; this.log(`⏹️ ${reason}. ${msg}`); this.ui(true);
+  }
+  dmgCalc(att,def,pow){ const base=Math.max(1,Math.floor((att.atk()*pow)/Math.max(1,def.def()))); const mult=effMult(att.hero.class,def.hero.class); return Math.max(1, Math.floor(base*mult)); }
+  passive(f){ const p=f.hero.passive; if(!p) return; if(p.regenEveryTurns && this.turn%p.regenEveryTurns===0){ const heal=Math.min(p.amount, f.hpMax-f.hp); if(heal>0){ f.hp+=heal; this.log(`💚 ${f.hero.name} regenerates ${heal} HP`);} } }
+  debuff(db,src,tgt){ if(!db) return; if(Math.random()> (db.chance??1)) return; const amt=db.stages; if(db.target==="opp"){ if(db.stat==="atk") tgt.atkS+=amt; if(db.stat==="def") tgt.defS+=amt; this.log(`🔻 ${tgt.hero.name} ${db.stat.toUpperCase()} ${amt>0?"rose":"fell"}`);} else { if(db.stat==="atk") src.atkS+=amt; if(db.stat==="def") src.defS+=amt; this.log(`🔺 ${src.hero.name} ${db.stat.toUpperCase()} ${amt>0?"rose":"fell"}`);} }
+  fast(att,def,isYou){ const mv=att.hero.fast; const d=this.dmgCalc(att,def,mv.power); def.hp=Math.max(0, def.hp-d); att.energy=clamp(att.energy+mv.energyGain,0,100); this.log(`${isYou?"🫵":"🤖"} ${att.hero.name} used ${mv.name} (${d})`); this.anim("fast",isYou); }
+  charged(att,def,mv,isYou){ let d=this.dmgCalc(att,def,mv.power); let sh=false; const will= !isYou ? this.aiShield(def,mv) : (window.youShieldQueued===true); if(will && def.shields>0){ def.shields--; sh=true; d=0; this.log(`🛡️ ${def.hero.name} shielded!`); } def.hp=Math.max(0,def.hp-d); if(!sh) this.debuff(mv.debuff,att,def); this.log(`${isYou?"🫵":"🤖"} ${att.hero.name} used ${mv.name}${sh?" (blocked)":" for "+d}`); att.energy=Math.max(0,att.energy-mv.energyCost); if(!isYou) window.youShieldQueued=false; this.anim("charged",isYou); }
+  aiShield(def,mv){ const c=(def.hp/def.hpMax)<0.6 && mv.power>=60; return c || Math.random()<0.3; }
+  aiAction(att,def){ const ch=att.hero.charged.slice().sort((a,b)=>b.power-a.power); for(const mv of ch){ if(att.energy>=mv.energyCost) return {t:"charged",move:mv}; } const disadv=effMult(def.hero.class,att.hero.class)>=EFFECTIVE && att.sw<=0 && this.you.canSwitch(); if(disadv && Math.random()<0.35){ const i=this.bestBench(this.ai,def.hero.class); if(i!=null) return {t:"switch",i}; } return {t:"fast"}; }
+  bestBench(team,enemy){ let bi=null, bs=-99; for(let i=0;i<team.roster.length;i++){ if(i===team.activeIndex) continue; const f=team.roster[i]; if(f.hp<=0) continue; const m=effMult(f.hero.class,enemy); const sc=(f.hp>0?1:0)+(m>1?1:0); if(sc>bs){bs=sc; bi=i;} } return bi; }
+  switchTo(team,i){ if(i<0||i>=team.roster.length) return false; if(team.roster[i].hp<=0) return false; team.activeIndex=i; team.active.sw=SWCD; this.anim("switch", team===this.you); return true; }
+  replace(team){ const i=team.next(); if(i>=0){ this.switchTo(team,i); return true; } return false; }
+  tick(){
+    if(this.endd) return; this.turn++; this.t-=TURN; if(this.t<=0) return this.end("time");
+    const Y=this.you.active, A=this.ai.active;
+    for(const f of [...this.you.roster, ...this.ai.roster]){ f.cd=Math.max(0,f.cd-TURN); f.sw=Math.max(0,f.sw-TURN); }
+    this.passive(Y); this.passive(A);
+    const ya=this.consume(Y); const aa=this.aiAction(A,Y);
+    const pr=i=>i==="switch"?3: i==="charged"?2:1;
+    const q=[{me:true,p:pr(ya.t),a:ya},{me:false,p:pr(aa.t),a:aa}].sort((x,y)=>y.p-x.p || ((x.a.t==="charged"&&y.a.t==="charged")? A.atk()-Y.atk() : 0));
+    for(const step of q){
+      const me=step.me, atk=me?this.you.active:this.ai.active, def=me?this.ai.active:this.you.active;
+      if(atk.hp<=0) continue;
+      if(step.a.t==="switch"){ this.switchTo(me?this.you:this.ai, step.a.i); }
+      else if(step.a.t==="charged"){ const mv=step.a.move; if(atk.energy>=mv.energyCost) this.charged(atk,def,mv,me); else if(atk.cd<=0){ this.fast(atk,def,me); atk.cd=atk.hero.fast.cooldown; } }
+      else if(step.a.t==="fast"){ if(atk.cd<=0){ this.fast(atk,def,me); atk.cd=atk.hero.fast.cooldown; } }
+      if(def.hp<=0){ this.log(`💥 ${def.hero.name} fainted!`); const team=me?this.ai:this.you; if(!this.replace(team)) return this.end("all fainted"); else this.log(`↩️ ${(me?"AI":"You")} sent out ${team.active.hero.name}`); }
+    }
+    this.ui();
+  }
+  consume(Y){ let a=window._QA||{t:"fast"}; if(a.t==="charged" && Y.energy<(a.move?.energyCost||999)) a={t:"fast"}; if(a.t==="switch" && Y.sw>0) a={t:"fast"}; window._QA=null; return a; }
+}
+
+// ------- UI / Roster -------
+const rosterDiv=document.getElementById("roster");
+const msg=document.getElementById("msg");
+let picked=new Set();
+function card(h){
+  const el=document.createElement("div"); el.className="card";
+  el.innerHTML=`<h3>${h.name}</h3>
+    <div class="row tiny"><span class="tag">${h.class}</span></div>
+    <div class="tiny">ATK ${h.stats.atk} • DEF ${h.stats.def} • HP ${h.stats.hp}</div>`;
+  el.style.borderColor=h.color; el.style.cursor="pointer";
+  el.addEventListener("click", ()=>{ if(picked.has(h.id)) picked.delete(h.id); else if(picked.size<3) picked.add(h.id); renderRoster(); });
+  return el;
+}
+function renderRoster(){ rosterDiv.innerHTML=""; heroes.forEach(h=> rosterDiv.appendChild(card(h))); msg.textContent= picked.size===3 ? "Ready!" : "Pick 3 (or Auto Pick)"; }
+function randomTeam(){ const ids=[...heroes.map(h=>h.id)]; const s=new Set(); while(s.size<3){ s.add(ids[Math.floor(Math.random()*ids.length)]); } return [...s].map(id=>heroes.find(h=>h.id===id)); }
+
+// ------- Panels -------
+const youPanel=document.getElementById("youPanel");
+const aiPanel=document.getElementById("aiPanel");
+const timerSpan=document.getElementById("timer"), turnSpan=document.getElementById("turn");
+const qaSpan=document.getElementById("qa"), sqSpan=document.getElementById("sq");
+const logDiv=document.getElementById("log");
+
+function line(m){ const p=document.createElement("div"); p.className="tiny"; p.textContent=m; logDiv.appendChild(p); logDiv.scrollTop=logDiv.scrollHeight; }
+
+function bars(f){
+  const hp=pct(f.hp,f.hpMax), en=pct(f.energy,100);
+  return `<div class="row" style="justify-content:space-between;"><b>${f.hero.name}</b> <span class="tiny">${f.hero.class}</span></div>
+    <div class="hpbar"><div style="width:${hp}%"></div></div>
+    <div class="tiny">HP ${f.hp}/${f.hpMax} (${hp}%)</div>
+    <div class="enbar"><div style="width:${en}%"></div></div>
+    <div class="tiny">Energy ${f.energy}/100</div>`;
+}
+function shields(n){ let s=""; for(let i=0;i<MAX_SH;i++){ s+=`<div class="shield ${i<(MAX_SH-n)?'off':''}"></div>`; } return `<div class="shields">${s}</div>`; }
+
+// ------- Canvas / Animations -------
+const canvas=document.getElementById("arena"), ctx=canvas.getContext("2d");
+let B=null; // battle
+function drawFighter(x,y,f,flip=false){
+  const r=26;
+  // body
+  ctx.fillStyle=f.hero.color; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  // outline
+  ctx.strokeStyle="#0b0b0b"; ctx.lineWidth=2; ctx.stroke();
+  // initials
+  ctx.fillStyle="#0b1220"; ctx.font="bold 12px system-ui"; ctx.textAlign="center"; ctx.textBaseline="middle";
+  const initials=f.hero.name.split(" ").map(w=>w[0]).slice(0,2).join("");
+  ctx.fillText(initials, x, y);
+}
+let animState={type:null, t:0, owner:true};
+function animate(type, owner){ animState={type, t:0, owner}; }
+function renderCanvas(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // ground
+  ctx.fillStyle="#0e1730"; ctx.fillRect(0, canvas.height*0.55, canvas.width, canvas.height*0.45);
+  if(!B){ requestAnimationFrame(renderCanvas); return; }
+  const yl={x:canvas.width*0.23, y:canvas.height*0.55-20};
+  const ar={x:canvas.width*0.77, y:canvas.height*0.55-20};
+  drawFighter(yl.x, yl.y, B.you.active);
+  drawFighter(ar.x, ar.y, B.ai.active);
+  // attack effects
+  if(animState.type){
+    animState.t+=0.02;
+    if(animState.type==="fast"||animState.type==="charged"){
+      const from=animState.owner? yl : ar;
+      const to=animState.owner? ar : yl;
+      const p=Math.min(1, animState.t);
+      const x=from.x + (to.x-from.x)*p;
+      const y=from.y - 10*Math.sin(p*Math.PI);
+      ctx.fillStyle= animState.type==="charged" ? "#ffd166" : "#64d2ff";
+      ctx.beginPath(); ctx.arc(x,y, animState.type==="charged"?8:5, 0, Math.PI*2); ctx.fill();
+      if(p>=1) animState.type=null;
+    }
+  }
+  requestAnimationFrame(renderCanvas);
+}
+requestAnimationFrame(renderCanvas);
+
+// ------- Controls -------
+const autoBtn=document.getElementById("autoBtn");
+const startBtn=document.getElementById("startBtn");
+const fastBtn=document.getElementById("fastBtn");
+const c1Btn=document.getElementById("c1Btn");
+const c2Btn=document.getElementById("c2Btn");
+const switchBtn=document.getElementById("switchBtn");
+const shieldBtn=document.getElementById("shieldBtn");
+let yourTeam=[], aiTeam=[];
+window._QA=null; window.youShieldQueued=false;
+
+function panelUpdate(final=false){
+  if(!B) return;
+  youPanel.innerHTML = bars(B.you.active) + shields(B.you.active.shields) + `<div class="tiny">Fast: ${B.you.active.hero.fast.name}</div><div class="tiny">C1: ${B.you.active.hero.charged[0].name}</div><div class="tiny">C2: ${B.you.active.hero.charged[1].name}</div>`;
+  aiPanel.innerHTML  = bars(B.ai.active) + shields(B.ai.active.shields);
+  timerSpan.textContent=Math.ceil(B.t); turnSpan.textContent=B.turn;
+  qaSpan.textContent=window._QA? window._QA.t.toUpperCase(): "None";
+  sqSpan.textContent=window.youShieldQueued? "Yes":"No";
+  const disabled = final || B.endd || B.you.active.hp<=0;
+  fastBtn.disabled=disabled; c1Btn.disabled=disabled; c2Btn.disabled=disabled;
+  switchBtn.disabled=disabled || B.you.active.sw>0 || !B.you.canSwitch();
+  shieldBtn.disabled=final || B.endd || B.you.active.shields<=0;
+}
+
+function startBattle(){
+  if(picked.size!==3){ picked=new Set(randomTeam().map(h=>h.id)); renderRoster(); }
+  yourTeam=[...picked].map(id=>heroes.find(h=>h.id===id));
+  aiTeam=randomTeam();
+  B=new Battle(yourTeam, aiTeam, line, panelUpdate, animate);
+  logDiv.innerHTML=""; window.youShieldQueued=false; window._QA=null;
+  B.start(); panelUpdate();
+}
+
+autoBtn.addEventListener("click", ()=>{ picked=new Set(randomTeam().map(h=>h.id)); renderRoster(); });
+startBtn.addEventListener("click", startBattle);
+fastBtn.addEventListener("click", ()=>{ window._QA={t:"fast"}; panelUpdate(); });
+c1Btn.addEventListener("click", ()=>{ window._QA={t:"charged", move:B.you.active.hero.charged[0]}; panelUpdate(); });
+c2Btn.addEventListener("click", ()=>{ window._QA={t:"charged", move:B.you.active.hero.charged[1]}; panelUpdate(); });
+switchBtn.addEventListener("click", ()=>{
+  if(B && B.you.canSwitch() && B.you.active.sw<=0){
+    const n=B.you.roster.length;
+    for(let step=1; step<n; step++){
+      const idx=(B.you.activeIndex+step)%n;
+      if(B.you.roster[idx].hp>0){ window._QA={t:"switch", i:idx}; break; }
+    }
+  }
+  panelUpdate();
+});
+shieldBtn.addEventListener("click", ()=>{ if(B && B.you.active.shields>0){ window.youShieldQueued=true; panelUpdate(); } });
+
+// Touch gestures on canvas
+let touchStart=null;
+canvas.addEventListener("touchstart", (e)=>{ touchStart={x:e.touches[0].clientX, y:e.touches[0].clientY, t:Date.now()}; });
+canvas.addEventListener("touchend", (e)=>{
+  if(!touchStart) return;
+  const dx=(e.changedTouches[0].clientX - touchStart.x);
+  const dt=Date.now()-touchStart.t;
+  // swipe right to switch
+  if(dx>60 && dt<800){ switchBtn.click(); }
+  // double tap to shield
+  const now=Date.now();
+  if(canvas._lastTap && (now-canvas._lastTap)<350){ shieldBtn.click(); canvas._lastTap=null; }
+  else { canvas._lastTap=now; }
+});
+
+renderRoster();
+</script>
+</body>
+</html>
